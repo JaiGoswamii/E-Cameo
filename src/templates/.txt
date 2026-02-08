@@ -1,0 +1,11 @@
+├── app.py                    # Flask backend with WebSocket
+├── templates/
+│   └── index.html           # Main interface
+├── static/
+│   ├── css/style.css        # Minimalist styling
+│   ├── js/chat.js           # Real-time chat logic
+│   ├── avatar.jpg           # Your static photo (add this)
+│   └── talking.gif          # Your talking GIF (add this)
+├── requirements.txt         # Dependencies
+├── create_talking_gif.py    # Helper to create GIF
+└── README.md               # Complete setup guide

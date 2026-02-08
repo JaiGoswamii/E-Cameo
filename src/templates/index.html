@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jai Goswami - AI Avatar</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="main-wrapper">
+        <!-- Avatar Section (Left/Top) -->
+        <div class="avatar-section">
+            <div class="avatar-container">
+                <img id="avatar-static" 
+                     src="{{ url_for('static', filename='avatar.jpg') }}" 
+                     alt="Jai Goswami" 
+                     class="avatar-img active">
+                
+                <img id="avatar-talking" 
+                     src="{{ url_for('static', filename='talking.gif') }}" 
+                     alt="Jai Goswami speaking" 
+                     class="avatar-img">
+            </div>
+            
+            <div class="avatar-info">
+                <h1 class="avatar-name">Jai Goswami</h1>
+                <div class="status-bar">
+                    <div class="status-dot" id="status-dot"></div>
+                    <span id="status-text">Ready to chat</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Content Section (Right/Bottom) -->
+        <div class="content-section">
+            <!-- Subtitles -->
+            <div id="subtitles" class="subtitles">
+                <div id="subtitle-text" class="subtitle-text"></div>
+            </div>
+
+            <!-- Controls -->
+            <div class="controls-container">
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <input 
+                            type="text" 
+                            id="user-input" 
+                            placeholder="Ask me anything..."
+                            autocomplete="off"
+                            autofocus
+                        >
+                        <button id="send-btn" class="send-btn">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="branding">
+                    <span>AI Avatar Assistant</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <audio id="audio-player" style="display: none;"></audio>
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+</body>
+</html>
