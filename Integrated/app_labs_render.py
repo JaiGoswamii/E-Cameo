@@ -36,7 +36,9 @@ app.config['SECRET_KEY'] = 'your-secret-key-here'
 # =============================
 # LOAD LINKEDIN PDF
 # =============================
-reader = PdfReader("/Users/jg/projects/ecameo/LLM/Me/linkedin.pdf")
+
+Base_dir = Path(__file__).parent.parent
+reader = PdfReader(Base_dir / "Integrated" / "Me" / "linkedin.pdf")
 linkedin = ""
 for page in reader.pages:
     text = page.extract_text()
@@ -46,7 +48,7 @@ for page in reader.pages:
 # =============================
 # LOAD TEXTUAL INFO
 # =============================
-with open("/Users/jg/projects/ecameo/LLM/Me/summary.txt", "r") as f:
+with open(Base_dir / "Integrated" / "Me" / "summary.txt", "r") as f:
     summary = f.read()
 
 name = "Jai Goswami"
