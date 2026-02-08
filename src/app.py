@@ -4,7 +4,7 @@ from typing import List, Dict, Optional
 from flask import Flask, render_template, request, Response, jsonify
 from dotenv import load_dotenv
 from openai import OpenAI
-from pypdf import PdfReader
+from PyPDF2 import PdfReader
 from pydantic import BaseModel, Field
 import base64
 from pathlib import Path
