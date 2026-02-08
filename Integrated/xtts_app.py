@@ -8,13 +8,12 @@ from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 from openai import OpenAI
-from elevenlabs.client import ElevenLabs
-from elevenlabs.play import play
 from pypdf import PdfReader
 from pydantic import BaseModel, Field
 import torch
 import numpy as np
 from pathlib import Path
+from TTS.api import TTS
 import re
 import io
 import wave
@@ -22,18 +21,18 @@ import wave
 # =============================
 # CONFIG
 # =============================
-load_dotenv(override=True)
 MODEL = "gpt-4o-mini"
 MAX_QNA_PAIRS = 5
-client = ElevenLabs(
-    api_key=os.getenv("ELEVENLABS_API_KEY")
-)
+LATENTS_FILE = "/Users/jg/projects/ecameo/Voice_Cloning/src/jai_voice_latents.pt"
+
+# Force .env to override everything
+load_dotenv(override=True)
 
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     raise RuntimeError("OPENAI_API_KEY not found in .env")
 
-openai_client = OpenAI(api_key=api_key)
+client = OpenAI(api_key=api_key)
 
 # =============================
 # FLASK APP SETUP
@@ -41,6 +40,16 @@ openai_client = OpenAI(api_key=api_key)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+# =============================
+# LOAD TTS MODEL & LATENTS
+# =============================
+print("Loading TTS model...")
+tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
+xtts_model = tts.synthesizer.tts_model
+
+print("Loading voice latents...")
+latents = torch.load(LATENTS_FILE, map_location="cpu")
 
 # =============================
 # LOAD LINKEDIN PDF
@@ -169,34 +178,59 @@ session = SessionMemory()
 # TTS PROCESSOR FOR WEB
 # =============================
 class WebTTSProcessor:
-    def __init__(self, model, voice_id, output_format):
+    """Processes TTS and streams audio chunks to web client"""
+    
+    def __init__(self, model, latents):
         self.model = model
-        self.voice_id = voice_id
-        self.output_format = output_format
-        self.sample_rate = 44100  # Add this line
-
-    def process_text_to_speech(self, text: str) -> bytes:
-        """Convert text to speech and return audio bytes"""
+        self.latents = latents
+        self.sample_rate = 24000
+        
+    def process_text_to_speech(self, text: str) -> np.ndarray:
+        """Convert text to speech and return audio array"""
         try:
-            # ElevenLabs returns an iterator of audio chunks
-            audio_stream = client.text_to_speech.convert(
+            out = self.model.inference(
                 text=text,
-                voice_id=self.voice_id,
-                model_id=self.model,
-                output_format=self.output_format,
+                language="en",
+                gpt_cond_latent=self.latents["gpt_cond_latent"],
+                speaker_embedding=self.latents["speaker_embedding"],
             )
             
-            # Collect all audio chunks
-            audio_bytes = b''.join(audio_stream)
-            return audio_bytes
+            if isinstance(out, dict):
+                wav = out.get("wav", None)
+            else:
+                wav = out
             
+            if isinstance(wav, list):
+                wav = wav[0]
+            
+            if isinstance(wav, torch.Tensor):
+                wav = wav.detach().cpu().numpy()
+            
+            wav = np.asarray(wav)
+            
+            if wav.ndim == 0:
+                wav = wav.reshape(1)
+            
+            wav = wav.astype(np.float32).flatten()
+            
+            return wav
         except Exception as e:
             print(f"[TTS ERROR] Failed to generate audio: {e}")
-            return b''
+            return np.array([])
     
-    def audio_to_base64(self, audio_bytes: bytes) -> str:
-        """Convert audio bytes to base64"""
-        return base64.b64encode(audio_bytes).decode('utf-8')
+    def audio_to_base64_wav(self, audio: np.ndarray) -> str:
+        """Convert audio array to base64 encoded WAV"""
+        buffer = io.BytesIO()
+        with wave.open(buffer, 'wb') as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(self.sample_rate)
+            # Convert float32 to int16
+            audio_int16 = (audio * 32767).astype(np.int16)
+            wav_file.writeframes(audio_int16.tobytes())
+        
+        buffer.seek(0)
+        return base64.b64encode(buffer.read()).decode('utf-8')
 
 
 class SentenceBuffer:
@@ -241,7 +275,7 @@ class SentenceBuffer:
 # =============================
 # WEBSOCKET HANDLERS
 # =============================
-tts_processor = WebTTSProcessor("eleven_multilingual_v2", "QtEl85LECywm4BDbmbXB", "mp3_44100_128")
+tts_processor = WebTTSProcessor(xtts_model, latents)
 
 @socketio.on('connect')
 def handle_connect():
@@ -267,7 +301,7 @@ def handle_message(data):
     messages.append({"role": "user", "content": user_input})
     
     try:
-        stream = openai_client.chat.completions.create(
+        stream = client.chat.completions.create(
             model=MODEL,
             messages=messages,
             tools=TOOLS,
@@ -292,7 +326,7 @@ def handle_message(data):
                 for sentence in complete_sentences:
                     audio = tts_processor.process_text_to_speech(sentence)
                     if len(audio) > 0:
-                        audio_b64 = tts_processor.audio_to_base64(audio)
+                        audio_b64 = tts_processor.audio_to_base64_wav(audio)
                         emit('audio_chunk', {'audio': audio_b64})
             
             # Check for tool calls
@@ -317,7 +351,7 @@ def handle_message(data):
             if remaining:
                 audio = tts_processor.process_text_to_speech(remaining)
                 if len(audio) > 0:
-                    audio_b64 = tts_processor.audio_to_base64(audio)
+                    audio_b64 = tts_processor.audio_to_base64_wav(audio)
                     emit('audio_chunk', {'audio': audio_b64})
         
         # Signal completion

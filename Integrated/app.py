@@ -1,60 +1,47 @@
 import os
 import json
-import queue
-import threading
-import base64
 from typing import List, Dict, Optional
-from flask import Flask, render_template, request, jsonify
-from flask_socketio import SocketIO, emit
+from flask import Flask, render_template, request, Response, jsonify
 from dotenv import load_dotenv
 from openai import OpenAI
 from pypdf import PdfReader
 from pydantic import BaseModel, Field
-import torch
-import numpy as np
+import base64
 from pathlib import Path
-from TTS.api import TTS
+from elevenlabs.client import ElevenLabs
 import re
-import io
-import wave
 
 # =============================
 # CONFIG
 # =============================
+load_dotenv(override=True)
 MODEL = "gpt-4o-mini"
 MAX_QNA_PAIRS = 5
-LATENTS_FILE = "/Users/jg/projects/ecameo/Voice_Cloning/src/jai_voice_latents.pt"
-
-# Force .env to override everything
-load_dotenv(override=True)
+client = ElevenLabs(
+    api_key=os.getenv("ELEVENLABS_API_KEY")
+)
 
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     raise RuntimeError("OPENAI_API_KEY not found in .env")
 
-client = OpenAI(api_key=api_key)
+openai_client = OpenAI(api_key=api_key)
 
 # =============================
 # FLASK APP SETUP
 # =============================
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
-socketio = SocketIO(app, cors_allowed_origins="*")
-
-# =============================
-# LOAD TTS MODEL & LATENTS
-# =============================
-print("Loading TTS model...")
-tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
-xtts_model = tts.synthesizer.tts_model
-
-print("Loading voice latents...")
-latents = torch.load(LATENTS_FILE, map_location="cpu")
 
 # =============================
 # LOAD LINKEDIN PDF
 # =============================
-reader = PdfReader("/Users/jg/projects/ecameo/LLM/Me/linkedin.pdf")
+
+Base_dir = Path(__file__).parent.parent
+linkedin_path = os.getenv("LINKEDIN_PDF_PATH", Base_dir / "Integrated" / "Me" / "linkedin.pdf")
+summary_path = os.getenv("SUMMARY_TXT_PATH", Base_dir / "Integrated" / "Me" / "summary.txt")
+
+reader = PdfReader(linkedin_path)
 linkedin = ""
 for page in reader.pages:
     text = page.extract_text()
@@ -64,10 +51,10 @@ for page in reader.pages:
 # =============================
 # LOAD TEXTUAL INFO
 # =============================
-with open("/Users/jg/projects/ecameo/LLM/Me/summary.txt", "r") as f:
+with open(summary_path, "r") as f:
     summary = f.read()
 
-name = "Jai Goswami"
+name = os.getenv("PERSON_NAME", "Jai Goswami")
 
 system_prompt = f"You are acting as {name}. You are answering questions on {name}'s website, \
 particularly questions related to {name}'s career, background, skills and experience. \
@@ -178,59 +165,32 @@ session = SessionMemory()
 # TTS PROCESSOR FOR WEB
 # =============================
 class WebTTSProcessor:
-    """Processes TTS and streams audio chunks to web client"""
-    
-    def __init__(self, model, latents):
+    def __init__(self, model, voice_id, output_format):
         self.model = model
-        self.latents = latents
-        self.sample_rate = 24000
-        
-    def process_text_to_speech(self, text: str) -> np.ndarray:
-        """Convert text to speech and return audio array"""
+        self.voice_id = voice_id
+        self.output_format = output_format
+        self.sample_rate = 44100
+
+    def process_text_to_speech(self, text: str) -> bytes:
+        """Convert text to speech and return audio bytes"""
         try:
-            out = self.model.inference(
+            audio_stream = client.text_to_speech.convert(
                 text=text,
-                language="en",
-                gpt_cond_latent=self.latents["gpt_cond_latent"],
-                speaker_embedding=self.latents["speaker_embedding"],
+                voice_id=self.voice_id,
+                model_id=self.model,
+                output_format=self.output_format,
             )
             
-            if isinstance(out, dict):
-                wav = out.get("wav", None)
-            else:
-                wav = out
+            audio_bytes = b''.join(audio_stream)
+            return audio_bytes
             
-            if isinstance(wav, list):
-                wav = wav[0]
-            
-            if isinstance(wav, torch.Tensor):
-                wav = wav.detach().cpu().numpy()
-            
-            wav = np.asarray(wav)
-            
-            if wav.ndim == 0:
-                wav = wav.reshape(1)
-            
-            wav = wav.astype(np.float32).flatten()
-            
-            return wav
         except Exception as e:
             print(f"[TTS ERROR] Failed to generate audio: {e}")
-            return np.array([])
+            return b''
     
-    def audio_to_base64_wav(self, audio: np.ndarray) -> str:
-        """Convert audio array to base64 encoded WAV"""
-        buffer = io.BytesIO()
-        with wave.open(buffer, 'wb') as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)  # 16-bit
-            wav_file.setframerate(self.sample_rate)
-            # Convert float32 to int16
-            audio_int16 = (audio * 32767).astype(np.int16)
-            wav_file.writeframes(audio_int16.tobytes())
-        
-        buffer.seek(0)
-        return base64.b64encode(buffer.read()).decode('utf-8')
+    def audio_to_base64(self, audio_bytes: bytes) -> str:
+        """Convert audio bytes to base64"""
+        return base64.b64encode(audio_bytes).decode('utf-8')
 
 
 class SentenceBuffer:
@@ -273,112 +233,101 @@ class SentenceBuffer:
 
 
 # =============================
-# WEBSOCKET HANDLERS
+# SSE CHAT ENDPOINT
 # =============================
-tts_processor = WebTTSProcessor(xtts_model, latents)
+voice_id = os.getenv("ELEVENLABS_VOICE_ID", "QtEl85LECywm4BDbmbXB")
+tts_processor = WebTTSProcessor("eleven_multilingual_v2", voice_id, "mp3_44100_128")
 
-@socketio.on('connect')
-def handle_connect():
-    print('Client connected')
-    emit('status', {'message': 'Connected to Jai\'s eCameo'})
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('Client disconnected')
-
-@socketio.on('send_message')
-def handle_message(data):
-    user_input = data.get('message', '').strip()
+@app.route('/chat', methods=['POST'])
+def chat():
+    """SSE endpoint for streaming chat responses"""
+    user_input = request.json.get('message', '').strip()
     
     if not user_input:
-        return
+        return jsonify({'error': 'Empty message'}), 400
     
-    # Signal that we're starting to respond
-    emit('response_start', {})
-    
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(session.get())
-    messages.append({"role": "user", "content": user_input})
-    
-    try:
-        stream = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS,
-            stream=True,
-        )
+    def generate():
+        # Signal start
+        yield f"data: {json.dumps({'type': 'response_start'})}\n\n"
         
-        full_response = ""
-        tool_calls = []
-        sentence_buffer = SentenceBuffer()
-        current_tool_call = None
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(session.get())
+        messages.append({"role": "user", "content": user_input})
         
-        for chunk in stream:
-            if chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_response += content
+        try:
+            stream = openai_client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                tools=TOOLS,
+                stream=True,
+            )
+            
+            full_response = ""
+            tool_calls = []
+            sentence_buffer = SentenceBuffer()
+            
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_response += content
+                    
+                    # Send text chunk
+                    yield f"data: {json.dumps({'type': 'text_chunk', 'text': content})}\n\n"
+                    
+                    # Generate audio for complete sentences
+                    complete_sentences = sentence_buffer.add_text(content)
+                    for sentence in complete_sentences:
+                        audio = tts_processor.process_text_to_speech(sentence)
+                        if len(audio) > 0:
+                            audio_b64 = tts_processor.audio_to_base64(audio)
+                            yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': sentence})}\n\n"
                 
-                # Send text to client
-                emit('text_chunk', {'text': content})
-                
-                # Check for complete sentences and generate audio
-                complete_sentences = sentence_buffer.add_text(content)
-                for sentence in complete_sentences:
-                    audio = tts_processor.process_text_to_speech(sentence)
+                # Handle tool calls
+                if chunk.choices[0].delta.tool_calls:
+                    for tool_call_delta in chunk.choices[0].delta.tool_calls:
+                        if tool_call_delta.index is not None:
+                            if len(tool_calls) <= tool_call_delta.index:
+                                tool_calls.append({
+                                    "id": tool_call_delta.id,
+                                    "name": tool_call_delta.function.name or "",
+                                    "arguments": tool_call_delta.function.arguments or ""
+                                })
+                            else:
+                                if tool_call_delta.function.arguments:
+                                    tool_calls[tool_call_delta.index]["arguments"] += tool_call_delta.function.arguments
+            
+            # Flush remaining text
+            if not tool_calls:
+                remaining = sentence_buffer.flush()
+                if remaining:
+                    audio = tts_processor.process_text_to_speech(remaining)
                     if len(audio) > 0:
-                        audio_b64 = tts_processor.audio_to_base64_wav(audio)
-                        emit('audio_chunk', {'audio': audio_b64})
+                        audio_b64 = tts_processor.audio_to_base64(audio)
+                        yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': remaining})}\n\n"
             
-            # Check for tool calls
-            if chunk.choices[0].delta.tool_calls:
-                for tool_call_delta in chunk.choices[0].delta.tool_calls:
-                    if tool_call_delta.index is not None:
-                        # New tool call
-                        if len(tool_calls) <= tool_call_delta.index:
-                            tool_calls.append({
-                                "id": tool_call_delta.id,
-                                "name": tool_call_delta.function.name if tool_call_delta.function.name else "",
-                                "arguments": tool_call_delta.function.arguments if tool_call_delta.function.arguments else ""
-                            })
-                        else:
-                            # Append to existing tool call
-                            if tool_call_delta.function.arguments:
-                                tool_calls[tool_call_delta.index]["arguments"] += tool_call_delta.function.arguments
-        
-        # Handle remaining text
-        if not tool_calls:
-            remaining = sentence_buffer.flush()
-            if remaining:
-                audio = tts_processor.process_text_to_speech(remaining)
-                if len(audio) > 0:
-                    audio_b64 = tts_processor.audio_to_base64_wav(audio)
-                    emit('audio_chunk', {'audio': audio_b64})
-        
-        # Signal completion
-        emit('response_end', {})
-        
-        # Update session
-        if not tool_calls:
-            session.add("user", user_input)
-            session.add("assistant", full_response.strip())
-        else:
-            # Handle tool calls
-            for tool_call in tool_calls:
-                try:
-                    args = json.loads(tool_call["arguments"])
-                    payload = {
-                        "tool": tool_call["name"],
-                        "data": args,
-                    }
-                    emit('tool_call', payload)
-                except json.JSONDecodeError as e:
-                    print(f"Error parsing tool call arguments: {e}")
+            # Signal completion
+            yield f"data: {json.dumps({'type': 'response_end'})}\n\n"
             
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-        emit('error', {'message': str(e)})
+            # Update session
+            if not tool_calls:
+                session.add("user", user_input)
+                session.add("assistant", full_response.strip())
+            else:
+                for tool_call in tool_calls:
+                    try:
+                        args = json.loads(tool_call["arguments"])
+                        payload = {"tool": tool_call["name"], "data": args}
+                        yield f"data: {json.dumps({'type': 'tool_call', **payload})}\n\n"
+                    except json.JSONDecodeError as e:
+                        print(f"Error parsing tool call: {e}")
+                        
+        except Exception as e:
+            print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream')
 
 # =============================
 # ROUTES
@@ -388,4 +337,5 @@ def index():
     return render_template('index.html')
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, host='0.0.0.0', port=5001)
+    port = int(os.environ.get('PORT', 5001))
+    app.run(debug=True, host='0.0.0.0', port=port)
