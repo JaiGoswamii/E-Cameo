@@ -7,7 +7,8 @@ from openai import OpenAI
 from PyPDF2 import PdfReader
 import base64
 from pathlib import Path
-from elevenlabs import generate, set_api_key
+# from elevenlabs import generate, set_api_key
+from elevenlabs.client import ElevenLabs
 import re
 
 # =============================
@@ -16,10 +17,11 @@ import re
 load_dotenv(override=True)
 MODEL = "gpt-4o-mini"
 MAX_QNA_PAIRS = 5
-# client = ElevenLabs(
-#     api_key=os.getenv("ELEVENLABS_API_KEY")
-# )
-set_api_key(os.getenv("ELEVENLABS_API_KEY"))
+
+# set_api_key(os.getenv("ELEVENLABS_API_KEY"))
+
+
+elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 
 
 api_key = os.getenv("OPENAI_API_KEY")
@@ -106,18 +108,20 @@ class WebTTSProcessor:
     def process_text_to_speech(self, text: str) -> bytes:
         """Convert text to speech and return audio bytes"""
         try:
-            # Use elevenlabs 1.3.0 API
-            audio_bytes = generate(
+            audio_generator = elevenlabs_client.generate(
                 text=text,
                 voice=self.voice_id,
                 model=self.model
             )
             
-            # generate() returns bytes directly in 1.3.0
+            # v1.9.0 returns generator - collect into bytes
+            audio_bytes = b''.join(audio_generator)
             return audio_bytes
             
         except Exception as e:
             print(f"[TTS ERROR] Failed to generate audio: {e}")
+            import traceback
+            traceback.print_exc()
             return b''
     
     def audio_to_base64(self, audio_bytes: bytes) -> str:
