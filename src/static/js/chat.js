@@ -64,6 +64,8 @@ async function sendMessage(message) {
             body: JSON.stringify({message})
         });
         
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         
@@ -72,51 +74,61 @@ async function sendMessage(message) {
             if (done) break;
             
             const chunk = decoder.decode(value);
-            const lines = chunk.split('\n');
+            const lines = chunk.split('\n\n');  // ✅ FIXED: \n\n for SSE
             
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
-                    const data = JSON.parse(line.slice(6));
-                    
-                    switch(data.type) {
-                        case 'response_start':
-                            setStatus('Responding...', false);
-                            break;
+                    try {
+                        const data = JSON.parse(line.slice(6));  // ✅ SSE format
                         
-                        case 'text_chunk':
-                            // Optional: display text in real-time
-                            break;
-                        
-                        case 'audio_chunk':
-                            audioQueue.push({audio: data.audio, text: data.text});
-                            playNextAudio();
-                            break;
-                        
-                        case 'response_end':
-                            userInput.disabled = false;
-                            sendBtn.disabled = false;
-                            userInput.focus();
-                            break;
-                        
-                        case 'tool_call':
-                            console.log('Tool called:', data.tool, data.data);
-                            break;
-                        
-                        case 'error':
-                            console.error('Error:', data.message);
-                            setStatus('Error occurred', true);
-                            userInput.disabled = false;
-                            sendBtn.disabled = false;
-                            break;
+                        switch(data.type) {
+                            case 'start':
+                            case 'response_start':
+                                setStatus('Responding...', false);
+                                break;
+                            
+                            case 'text':
+                            case 'text_chunk':  // ✅ Handle both formats
+                                // Optional: live text display
+                                break;
+                            
+                            case 'audio':
+                            case 'audio_chunk':  // ✅ Handle both
+                                audioQueue.push({audio: data.audio, text: data.text || ''});
+                                playNextAudio();
+                                break;
+                            
+                            case 'end':
+                            case 'response_end':
+                                setStatus('Ready to chat', true);
+                                userInput.disabled = false;
+                                sendBtn.disabled = false;
+                                userInput.focus();
+                                break;
+                            
+                            case 'tool_call':
+                                console.log('Tool:', data);
+                                break;
+                                
+                            case 'error':
+                                console.error('Error:', data.message);
+                                setStatus('Error occurred', true);
+                                userInput.disabled = false;
+                                sendBtn.disabled = false;
+                                break;
+                        }
+                    } catch (parseError) {
+                        console.log('Parse skip:', line.slice(0, 50));
                     }
                 }
             }
         }
     } catch (error) {
         console.error('Fetch error:', error);
-        setStatus('Connection error', true);
+        setStatus('Connection error - retry', true);
         userInput.disabled = false;
         sendBtn.disabled = false;
+        userInput.focus();
     }
 }
 
