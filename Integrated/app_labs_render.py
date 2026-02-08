@@ -38,7 +38,10 @@ app.config['SECRET_KEY'] = 'your-secret-key-here'
 # =============================
 
 Base_dir = Path(__file__).parent.parent
-reader = PdfReader(Base_dir / "Integrated" / "Me" / "linkedin.pdf")
+linkedin_path = os.getenv("LINKEDIN_PDF_PATH", Base_dir / "Integrated" / "Me" / "linkedin.pdf")
+summary_path = os.getenv("SUMMARY_TXT_PATH", Base_dir / "Integrated" / "Me" / "summary.txt")
+
+reader = PdfReader(linkedin_path)
 linkedin = ""
 for page in reader.pages:
     text = page.extract_text()
@@ -48,10 +51,10 @@ for page in reader.pages:
 # =============================
 # LOAD TEXTUAL INFO
 # =============================
-with open(Base_dir / "Integrated" / "Me" / "summary.txt", "r") as f:
+with open(summary_path, "r") as f:
     summary = f.read()
 
-name = "Jai Goswami"
+name = os.getenv("PERSON_NAME", "Jai Goswami")
 
 system_prompt = f"You are acting as {name}. You are answering questions on {name}'s website, \
 particularly questions related to {name}'s career, background, skills and experience. \
@@ -232,7 +235,8 @@ class SentenceBuffer:
 # =============================
 # SSE CHAT ENDPOINT
 # =============================
-tts_processor = WebTTSProcessor("eleven_multilingual_v2", "QtEl85LECywm4BDbmbXB", "mp3_44100_128")
+voice_id = os.getenv("ELEVENLABS_VOICE_ID", "QtEl85LECywm4BDbmbXB")
+tts_processor = WebTTSProcessor("eleven_multilingual_v2", voice_id, "mp3_44100_128")
 
 @app.route('/chat', methods=['POST'])
 def chat():
