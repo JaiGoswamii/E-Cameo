@@ -38,8 +38,8 @@ app.config['SECRET_KEY'] = 'your-secret-key-here'
 # =============================
 
 Base_dir = Path(__file__).parent.parent
-linkedin_path = os.getenv("LINKEDIN_PDF_PATH", Base_dir / "Integrated" / "Me" / "linkedin.pdf")
-summary_path = os.getenv("SUMMARY_TXT_PATH", Base_dir / "Integrated" / "Me" / "summary.txt")
+linkedin_path = os.getenv("LINKEDIN_PDF_PATH", Base_dir / "src" / "Me" / "linkedin.pdf")
+summary_path = os.getenv("SUMMARY_TXT_PATH", Base_dir / "src" / "Me" / "summary.txt")
 
 reader = PdfReader(linkedin_path)
 linkedin = ""
