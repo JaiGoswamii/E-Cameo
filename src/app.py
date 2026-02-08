@@ -5,11 +5,9 @@ from flask import Flask, render_template, request, Response, jsonify
 from dotenv import load_dotenv
 from openai import OpenAI
 from PyPDF2 import PdfReader
-# REMOVE THIS LINE:
-# from pydantic import BaseModel, Field
 import base64
 from pathlib import Path
-from elevenlabs import ElevenLabs
+from elevenlabs import generate, set_api_key
 import re
 
 # =============================
@@ -18,9 +16,11 @@ import re
 load_dotenv(override=True)
 MODEL = "gpt-4o-mini"
 MAX_QNA_PAIRS = 5
-client = ElevenLabs(
-    api_key=os.getenv("ELEVENLABS_API_KEY")
-)
+# client = ElevenLabs(
+#     api_key=os.getenv("ELEVENLABS_API_KEY")
+# )
+set_api_key(os.getenv("ELEVENLABS_API_KEY"))
+
 
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
@@ -106,14 +106,14 @@ class WebTTSProcessor:
     def process_text_to_speech(self, text: str) -> bytes:
         """Convert text to speech and return audio bytes"""
         try:
-            audio_stream = client.text_to_speech.convert(
+            # Use elevenlabs 1.3.0 API
+            audio_bytes = generate(
                 text=text,
-                voice_id=self.voice_id,
-                model_id=self.model,
-                output_format=self.output_format,
+                voice=self.voice_id,
+                model=self.model
             )
             
-            audio_bytes = b''.join(audio_stream)
+            # generate() returns bytes directly in 1.3.0
             return audio_bytes
             
         except Exception as e:
