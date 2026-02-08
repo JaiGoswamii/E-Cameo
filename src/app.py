@@ -5,10 +5,11 @@ from flask import Flask, render_template, request, Response, jsonify
 from dotenv import load_dotenv
 from openai import OpenAI
 from PyPDF2 import PdfReader
-from pydantic import BaseModel, Field
+# REMOVE THIS LINE:
+# from pydantic import BaseModel, Field
 import base64
 from pathlib import Path
-from elevenlabs.client import ElevenLabs
+from elevenlabs import ElevenLabs
 import re
 
 # =============================
@@ -36,7 +37,6 @@ app.config['SECRET_KEY'] = 'your-secret-key-here'
 # =============================
 # LOAD LINKEDIN PDF
 # =============================
-
 Base_dir = Path(__file__).parent.parent
 linkedin_path = os.getenv("LINKEDIN_PDF_PATH", Base_dir / "src" / "Me" / "linkedin.pdf")
 summary_path = os.getenv("SUMMARY_TXT_PATH", Base_dir / "src" / "Me" / "summary.txt")
@@ -66,74 +66,6 @@ If you don't know the answer, say so."
 system_prompt += f"\n\n## Summary:\n{summary}\n\n## LinkedIn Profile:\n{linkedin}\n\n"
 system_prompt += f"With this context, please chat with the user, always staying in character as {name}."
 system_prompt += f"You are strictly not to answer questions that are not related to {name}'s career, background, skills and experience, in such cases you should say that you can only answer questions related to {name}'s career, background, skills and experience."
-
-# =============================
-# TOOL SCHEMAS
-# =============================
-class GetAnswerLater(BaseModel):
-    user_email: str = Field(..., description="Email address provided by the user")
-    question: str = Field(..., description="The unanswered user question")
-    conversation_summary: str = Field(..., description="Summary of the last 5 QnAs")
-
-
-class ContactMe(BaseModel):
-    user_email: str = Field(..., description="User's email address")
-    reason: str = Field(..., description="Why the user wants to get in touch")
-    conversation_summary: str = Field(..., description="Summary of the last 5 QnAs")
-
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_answer_later",
-            "description": "Save a question for later response when you don't know the answer",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_email": {
-                        "type": "string",
-                        "description": "Email address provided by the user"
-                    },
-                    "question": {
-                        "type": "string",
-                        "description": "The unanswered user question"
-                    },
-                    "conversation_summary": {
-                        "type": "string",
-                        "description": "Summary of the last 5 QnAs"
-                    }
-                },
-                "required": ["user_email", "question", "conversation_summary"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "contact_me",
-            "description": "Allow user to request direct contact",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_email": {
-                        "type": "string",
-                        "description": "User's email address"
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Why the user wants to get in touch"
-                    },
-                    "conversation_summary": {
-                        "type": "string",
-                        "description": "Summary of the last 5 QnAs"
-                    }
-                },
-                "required": ["user_email", "reason", "conversation_summary"]
-            }
-        }
-    }
-]
 
 # =============================
 # SESSION MEMORY
@@ -258,12 +190,11 @@ def chat():
             stream = openai_client.chat.completions.create(
                 model=MODEL,
                 messages=messages,
-                tools=TOOLS,
+                # REMOVE tools=TOOLS since we commented it out
                 stream=True,
             )
             
             full_response = ""
-            tool_calls = []
             sentence_buffer = SentenceBuffer()
             
             for chunk in stream:
@@ -281,45 +212,21 @@ def chat():
                         if len(audio) > 0:
                             audio_b64 = tts_processor.audio_to_base64(audio)
                             yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': sentence})}\n\n"
-                
-                # Handle tool calls
-                if chunk.choices[0].delta.tool_calls:
-                    for tool_call_delta in chunk.choices[0].delta.tool_calls:
-                        if tool_call_delta.index is not None:
-                            if len(tool_calls) <= tool_call_delta.index:
-                                tool_calls.append({
-                                    "id": tool_call_delta.id,
-                                    "name": tool_call_delta.function.name or "",
-                                    "arguments": tool_call_delta.function.arguments or ""
-                                })
-                            else:
-                                if tool_call_delta.function.arguments:
-                                    tool_calls[tool_call_delta.index]["arguments"] += tool_call_delta.function.arguments
             
             # Flush remaining text
-            if not tool_calls:
-                remaining = sentence_buffer.flush()
-                if remaining:
-                    audio = tts_processor.process_text_to_speech(remaining)
-                    if len(audio) > 0:
-                        audio_b64 = tts_processor.audio_to_base64(audio)
-                        yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': remaining})}\n\n"
+            remaining = sentence_buffer.flush()
+            if remaining:
+                audio = tts_processor.process_text_to_speech(remaining)
+                if len(audio) > 0:
+                    audio_b64 = tts_processor.audio_to_base64(audio)
+                    yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': remaining})}\n\n"
             
             # Signal completion
             yield f"data: {json.dumps({'type': 'response_end'})}\n\n"
             
             # Update session
-            if not tool_calls:
-                session.add("user", user_input)
-                session.add("assistant", full_response.strip())
-            else:
-                for tool_call in tool_calls:
-                    try:
-                        args = json.loads(tool_call["arguments"])
-                        payload = {"tool": tool_call["name"], "data": args}
-                        yield f"data: {json.dumps({'type': 'tool_call', **payload})}\n\n"
-                    except json.JSONDecodeError as e:
-                        print(f"Error parsing tool call: {e}")
+            session.add("user", user_input)
+            session.add("assistant", full_response.strip())
                         
         except Exception as e:
             print(f"Error: {e}")
@@ -338,4 +245,4 @@ def index():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)
