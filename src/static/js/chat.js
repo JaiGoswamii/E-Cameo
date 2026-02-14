@@ -13,6 +13,21 @@ const typingIndicator = document.getElementById('typing-indicator');
 let audioQueue = [];
 let isPlaying = false;
 let currentAssistantMessage = null;
+let audioUnlocked = false;
+
+// Unlock audio on first user interaction
+async function unlockAudio() {
+    if (audioUnlocked) return;
+    try {
+        await audioPlayer.play();
+        audioPlayer.pause();
+        audioPlayer.currentTime = 0;
+        audioUnlocked = true;
+        console.log('[DEBUG] Audio unlocked');
+    } catch (e) {
+        console.log('[DEBUG] Audio unlock failed:', e);
+    }
+}
 
 function setStatus(message, isReady = true) {
     statusText.textContent = message;
@@ -140,18 +155,27 @@ async function sendMessage(message) {
         
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
+        let buffer = ''; // Buffer for incomplete data
         
         while (true) {
             const {done, value} = await reader.read();
             if (done) break;
             
-            const chunk = decoder.decode(value);
-            const lines = chunk.split('\n\n');
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            
+            // Keep the last incomplete line in buffer
+            buffer = lines.pop() || '';
+            
+            let currentData = '';
             
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
+                    currentData += line.slice(6);
+                } else if (line === '' && currentData) {
+                    // Empty line marks end of SSE message
                     try {
-                        const data = JSON.parse(line.slice(6));
+                        const data = JSON.parse(currentData);
                         
                         switch(data.type) {
                             case 'start':
@@ -199,8 +223,11 @@ async function sendMessage(message) {
                                 sendBtn.disabled = false;
                                 break;
                         }
+                        
+                        currentData = '';
                     } catch (parseError) {
-                        console.log('Parse skip:', line.slice(0, 50));
+                        console.error('[DEBUG] JSON parse error:', parseError, 'Data:', currentData.slice(0, 100));
+                        currentData = '';
                     }
                 }
             }
@@ -214,9 +241,15 @@ async function sendMessage(message) {
     }
 }
 
-sendBtn.addEventListener('click', () => sendMessage(userInput.value));
+sendBtn.addEventListener('click', () => {
+    unlockAudio();
+    sendMessage(userInput.value);
+});
 userInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') sendMessage(userInput.value);
+    if (e.key === 'Enter') {
+        unlockAudio();
+        sendMessage(userInput.value);
+    }
 });
 
 // Initial status
