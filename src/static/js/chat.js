@@ -160,14 +160,6 @@ async function playNextAudio() {
     showTalkingAvatar();
     showSubtitles(text);
     
-    // CRITICAL: Clean up previous audio
-    audioPlayer.pause();
-    audioPlayer.currentTime = 0;
-    audioPlayer.src = '';
-    
-    // Small delay to ensure cleanup
-    await new Promise(resolve => setTimeout(resolve, 50));
-    
     // CRITICAL: Set up event handlers BEFORE changing src
     audioPlayer.onended = () => {
         console.log('[AUDIO] Playback ended');
@@ -204,9 +196,6 @@ async function playNextAudio() {
     
     // Force load
     audioPlayer.load();
-    
-    // Small delay before play
-    await new Promise(resolve => setTimeout(resolve, 50));
     
     // Attempt to play
     try {
@@ -322,14 +311,14 @@ async function sendMessage(message) {
                             
                             case 'text':
                             case 'text_chunk':
-                                // Display ALL text immediately as it streams
+                                // Display text immediately - don't wait for audio
                                 appendToAssistantMessage(data.text);
                                 typingIndicator.classList.remove('active');
                                 break;
                             
                             case 'audio':
                             case 'audio_chunk':
-                                // Queue audio for playback
+                                // Queue audio for playback - independent of text display
                                 console.log('[CHAT] Received audio chunk:', {
                                     textLength: data.text?.length || 0,
                                     audioLength: data.audio?.length || 0
@@ -340,7 +329,10 @@ async function sendMessage(message) {
                                         audio: data.audio, 
                                         text: data.text || ''
                                     });
-                                    playNextAudio();
+                                    // Don't wait - just trigger if not playing
+                                    if (!isPlaying) {
+                                        playNextAudio();
+                                    }
                                 } else {
                                     console.warn('[CHAT] Empty audio chunk received');
                                 }
@@ -350,6 +342,7 @@ async function sendMessage(message) {
                             case 'response_end':
                                 typingIndicator.classList.remove('active');
                                 currentAssistantMessage = null;
+                                // Only update status if audio queue is empty
                                 if (audioQueue.length === 0 && !isPlaying) {
                                     setStatus('Ready to chat', true);
                                 }

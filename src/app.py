@@ -264,6 +264,11 @@ def test_tts():
 # =============================
 # ROUTES
 # =============================
+@app.route('/favicon.ico')
+def favicon():
+    """Return a simple favicon to prevent 404 errors"""
+    return '', 204  # No content response
+
 @app.route('/')
 def index():
     return render_template('index.html')
