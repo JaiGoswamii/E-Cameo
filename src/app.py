@@ -7,7 +7,6 @@ from openai import OpenAI
 from PyPDF2 import PdfReader
 import base64
 from pathlib import Path
-# from elevenlabs import generate, set_api_key
 from elevenlabs.client import ElevenLabs
 import re
 
@@ -18,11 +17,7 @@ load_dotenv(override=True)
 MODEL = "gpt-4o-mini"
 MAX_QNA_PAIRS = 5
 
-# set_api_key(os.getenv("ELEVENLABS_API_KEY"))
-
-
 elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-
 
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
@@ -96,7 +91,7 @@ class SessionMemory:
 session = SessionMemory()
 
 # =============================
-# TTS PROCESSOR FOR WEB
+# TTS PROCESSOR FOR WEB - FIXED
 # =============================
 class WebTTSProcessor:
     def __init__(self, model, voice_id, output_format):
@@ -108,14 +103,20 @@ class WebTTSProcessor:
     def process_text_to_speech(self, text: str) -> bytes:
         """Convert text to speech and return audio bytes"""
         try:
-            audio_generator = elevenlabs_client.generate(
+            # CRITICAL FIX: Use explicit output_format parameter
+            audio_generator = elevenlabs_client.text_to_speech.convert(
+                voice_id=self.voice_id,
                 text=text,
-                voice=self.voice_id,
-                model=self.model
+                model_id=self.model,
+                output_format="mp3_44100_128"  # Explicit format
             )
             
-            # v1.9.0 returns generator - collect into bytes
+            # Collect audio bytes
             audio_bytes = b''.join(audio_generator)
+            
+            # Log for debugging
+            print(f"[TTS] Generated {len(audio_bytes)} bytes for: '{text[:50]}...'")
+            
             return audio_bytes
             
         except Exception as e:
@@ -126,11 +127,15 @@ class WebTTSProcessor:
     
     def audio_to_base64(self, audio_bytes: bytes) -> str:
         """Convert audio bytes to base64"""
-        return base64.b64encode(audio_bytes).decode('utf-8')
+        if not audio_bytes:
+            return ""
+        b64 = base64.b64encode(audio_bytes).decode('utf-8')
+        print(f"[TTS] Base64 length: {len(b64)}")
+        return b64
 
 
 # =============================
-# SSE CHAT ENDPOINT
+# SSE CHAT ENDPOINT - FIXED
 # =============================
 voice_id = os.getenv("ELEVENLABS_VOICE_ID", "QtEl85LECywm4BDbmbXB")
 tts_processor = WebTTSProcessor("eleven_multilingual_v2", voice_id, "mp3_44100_128")
@@ -142,6 +147,8 @@ def chat():
     
     if not user_input:
         return jsonify({'error': 'Empty message'}), 400
+    
+    print(f"[CHAT] Received message: {user_input}")
     
     def generate():
         # Signal start
@@ -159,7 +166,7 @@ def chat():
             )
             
             full_response = ""
-            text_buffer = ""  # Simple accumulator instead of sentence buffer
+            text_buffer = ""
             
             for chunk in stream:
                 if chunk.choices[0].delta.content:
@@ -167,24 +174,41 @@ def chat():
                     full_response += content
                     text_buffer += content
                     
-                    # Send text chunk
+                    # Send text chunk immediately
                     yield f"data: {json.dumps({'type': 'text_chunk', 'text': content})}\n\n"
                     
-                    # Generate audio every ~50 characters or at sentence breaks
-                    if len(text_buffer) >= 50 or any(text_buffer.endswith(p) for p in ['. ', '! ', '? ', '.\n', '!\n', '?\n']):
-                        if text_buffer.strip():
-                            audio = tts_processor.process_text_to_speech(text_buffer.strip())
-                            if len(audio) > 0:
-                                audio_b64 = tts_processor.audio_to_base64(audio)
-                                yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': text_buffer.strip()})}\n\n"
-                            text_buffer = ""
+                    # Generate audio at sentence breaks or every 40 chars
+                    should_generate = (
+                        len(text_buffer) >= 40 or 
+                        any(text_buffer.rstrip().endswith(p) for p in ['.', '!', '?'])
+                    )
+                    
+                    if should_generate and text_buffer.strip():
+                        clean_text = text_buffer.strip()
+                        print(f"[CHAT] Generating audio for: '{clean_text[:50]}...'")
+                        
+                        audio = tts_processor.process_text_to_speech(clean_text)
+                        
+                        if audio and len(audio) > 0:
+                            audio_b64 = tts_processor.audio_to_base64(audio)
+                            if audio_b64:
+                                yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': clean_text})}\n\n"
+                                print(f"[CHAT] Sent audio chunk")
+                        else:
+                            print(f"[CHAT] WARNING: No audio generated")
+                        
+                        text_buffer = ""
             
             # Send any remaining text as audio
             if text_buffer.strip():
-                audio = tts_processor.process_text_to_speech(text_buffer.strip())
-                if len(audio) > 0:
+                clean_text = text_buffer.strip()
+                print(f"[CHAT] Final audio for: '{clean_text[:50]}...'")
+                
+                audio = tts_processor.process_text_to_speech(clean_text)
+                if audio and len(audio) > 0:
                     audio_b64 = tts_processor.audio_to_base64(audio)
-                    yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': text_buffer.strip()})}\n\n"
+                    if audio_b64:
+                        yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': clean_text})}\n\n"
             
             # Signal completion
             yield f"data: {json.dumps({'type': 'response_end'})}\n\n"
@@ -192,14 +216,50 @@ def chat():
             # Update session
             session.add("user", user_input)
             session.add("assistant", full_response.strip())
+            
+            print(f"[CHAT] Response complete")
                         
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"[CHAT ERROR] {e}")
             import traceback
             traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
     
     return Response(generate(), mimetype='text/event-stream')
+
+# =============================
+# TEST ENDPOINT FOR DEBUGGING
+# =============================
+@app.route('/test-tts')
+def test_tts():
+    """Test TTS functionality"""
+    try:
+        test_text = "This is a test of the text to speech system."
+        audio = tts_processor.process_text_to_speech(test_text)
+        
+        if not audio or len(audio) == 0:
+            return jsonify({
+                'success': False,
+                'error': 'No audio generated',
+                'text': test_text
+            }), 500
+        
+        audio_b64 = tts_processor.audio_to_base64(audio)
+        
+        return jsonify({
+            'success': True,
+            'audio_length': len(audio),
+            'base64_length': len(audio_b64),
+            'text': test_text,
+            'audio': audio_b64[:100] + '...'  # First 100 chars
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 # =============================
 # ROUTES
@@ -210,4 +270,7 @@ def index():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
+    print(f"[SERVER] Starting on port {port}")
+    print(f"[CONFIG] ElevenLabs API key present: {bool(os.getenv('ELEVENLABS_API_KEY'))}")
+    print(f"[CONFIG] Voice ID: {voice_id}")
     app.run(host='0.0.0.0', port=port)

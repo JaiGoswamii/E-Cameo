@@ -15,16 +15,46 @@ let isPlaying = false;
 let currentAssistantMessage = null;
 let audioUnlocked = false;
 
+// CRITICAL FIX: Unlock audio immediately on ANY user interaction
+document.addEventListener('DOMContentLoaded', () => {
+    // Multiple triggers to ensure audio works
+    const unlockEvents = ['click', 'touchstart', 'keydown'];
+    
+    unlockEvents.forEach(event => {
+        document.addEventListener(event, unlockAudio, { once: true });
+    });
+    
+    // Also unlock on input focus
+    userInput.addEventListener('focus', unlockAudio, { once: true });
+});
+
 // Unlock audio on first user interaction
 async function unlockAudio() {
     if (audioUnlocked) return;
+    
+    console.log('[AUDIO] Attempting to unlock audio context');
+    
     try {
-        await audioPlayer.play();
-        audioPlayer.pause();
-        audioPlayer.currentTime = 0;
-        audioUnlocked = true;
+        // Create a silent audio buffer and play it
+        audioPlayer.volume = 0.01; // Very quiet
+        audioPlayer.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4S+T3idAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQZDwP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+        
+        const playPromise = audioPlayer.play();
+        
+        if (playPromise !== undefined) {
+            await playPromise;
+            audioPlayer.pause();
+            audioPlayer.currentTime = 0;
+            audioPlayer.volume = 1.0; // Restore volume
+            audioUnlocked = true;
+            console.log('[AUDIO] Audio unlocked successfully');
+        }
     } catch (e) {
-        // Silent fail - not critical
+        console.warn('[AUDIO] Failed to unlock:', e);
+        // Try again on next interaction
+        setTimeout(() => {
+            audioUnlocked = false;
+        }, 100);
     }
 }
 
@@ -87,17 +117,25 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// FIXED: Better audio playback with error handling
 async function playNextAudio() {
     if (isPlaying || audioQueue.length === 0) return;
     
     isPlaying = true;
     const {audio, text} = audioQueue.shift();
     
+    console.log('[AUDIO] Playing:', {
+        textLength: text.length,
+        audioLength: audio.length,
+        queueRemaining: audioQueue.length
+    });
+    
     showTalkingAvatar();
     showSubtitles(text);
     
-    // Set up event handlers BEFORE setting src
+    // CRITICAL: Set up event handlers BEFORE changing src
     audioPlayer.onended = () => {
+        console.log('[AUDIO] Playback ended');
         isPlaying = false;
         hideSubtitles();
         if (audioQueue.length > 0) {
@@ -109,25 +147,66 @@ async function playNextAudio() {
     };
     
     audioPlayer.onerror = (e) => {
-        console.error('Audio playback error:', e);
+        console.error('[AUDIO] Playback error:', {
+            error: e,
+            networkState: audioPlayer.networkState,
+            readyState: audioPlayer.readyState,
+            errorCode: audioPlayer.error ? audioPlayer.error.code : 'unknown'
+        });
         isPlaying = false;
         hideSubtitles();
         if (audioQueue.length > 0) {
             playNextAudio();
         } else {
             showStaticAvatar();
-            setStatus('Error playing audio', true);
+            setStatus('Audio error - chat continues', true);
         }
     };
     
+    // CRITICAL: Validate base64 data
+    if (!audio || audio.length < 100) {
+        console.error('[AUDIO] Invalid audio data');
+        isPlaying = false;
+        hideSubtitles();
+        if (audioQueue.length > 0) {
+            playNextAudio();
+        }
+        return;
+    }
+    
+    // Set the audio source
     audioPlayer.src = `data:audio/mp3;base64,${audio}`;
     
+    // Load the audio
     try {
+        audioPlayer.load(); // Ensure audio is loaded
         await audioPlayer.play();
+        console.log('[AUDIO] Started playing successfully');
     } catch (err) {
-        console.error('Play error:', err);
-        isPlaying = false;
-        if (audioQueue.length > 0) {
+        console.error('[AUDIO] Play failed:', {
+            name: err.name,
+            message: err.message
+        });
+        
+        // If autoplay blocked, try to unlock again
+        if (err.name === 'NotAllowedError') {
+            console.log('[AUDIO] Autoplay blocked - attempting unlock');
+            audioUnlocked = false;
+            await unlockAudio();
+            
+            // Retry play
+            try {
+                await audioPlayer.play();
+                console.log('[AUDIO] Retry successful');
+            } catch (retryErr) {
+                console.error('[AUDIO] Retry failed:', retryErr);
+                isPlaying = false;
+            }
+        } else {
+            isPlaying = false;
+        }
+        
+        if (!isPlaying && audioQueue.length > 0) {
             playNextAudio();
         }
     }
@@ -136,11 +215,18 @@ async function playNextAudio() {
 async function sendMessage(message) {
     if (!message.trim()) return;
     
+    // Ensure audio is unlocked before sending
+    if (!audioUnlocked) {
+        await unlockAudio();
+    }
+    
     addUserMessage(message);
     setStatus('Thinking...', false);
     userInput.value = '';
     userInput.disabled = true;
     sendBtn.disabled = true;
+    
+    console.log('[CHAT] Sending message:', message);
     
     try {
         const response = await fetch('/chat', {
@@ -149,15 +235,20 @@ async function sendMessage(message) {
             body: JSON.stringify({message})
         });
         
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
         
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-        let buffer = ''; // Buffer for incomplete data
+        let buffer = '';
         
         while (true) {
             const {done, value} = await reader.read();
-            if (done) break;
+            if (done) {
+                console.log('[CHAT] Stream complete');
+                break;
+            }
             
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
@@ -174,6 +265,8 @@ async function sendMessage(message) {
                     // Empty line marks end of SSE message
                     try {
                         const data = JSON.parse(currentData);
+                        
+                        console.log('[CHAT] Event:', data.type);
                         
                         switch(data.type) {
                             case 'start':
@@ -192,27 +285,41 @@ async function sendMessage(message) {
                             
                             case 'audio':
                             case 'audio_chunk':
-                                // Queue audio for playback (subtitles + avatar animation)
-                                audioQueue.push({audio: data.audio, text: data.text || ''});
-                                playNextAudio();
+                                // Queue audio for playback
+                                console.log('[CHAT] Received audio chunk:', {
+                                    textLength: data.text?.length || 0,
+                                    audioLength: data.audio?.length || 0
+                                });
+                                
+                                if (data.audio && data.audio.length > 0) {
+                                    audioQueue.push({
+                                        audio: data.audio, 
+                                        text: data.text || ''
+                                    });
+                                    playNextAudio();
+                                } else {
+                                    console.warn('[CHAT] Empty audio chunk received');
+                                }
                                 break;
                             
                             case 'end':
                             case 'response_end':
                                 typingIndicator.classList.remove('active');
                                 currentAssistantMessage = null;
-                                setStatus('Ready to chat', true);
+                                if (audioQueue.length === 0 && !isPlaying) {
+                                    setStatus('Ready to chat', true);
+                                }
                                 userInput.disabled = false;
                                 sendBtn.disabled = false;
                                 userInput.focus();
                                 break;
                             
                             case 'tool_call':
-                                console.log('Tool:', data);
+                                console.log('[CHAT] Tool:', data);
                                 break;
                                 
                             case 'error':
-                                console.error('Error:', data.message);
+                                console.error('[CHAT] Error:', data.message);
                                 typingIndicator.classList.remove('active');
                                 setStatus('Error occurred', true);
                                 userInput.disabled = false;
@@ -222,14 +329,14 @@ async function sendMessage(message) {
                         
                         currentData = '';
                     } catch (parseError) {
-                        // Skip invalid JSON silently
+                        console.warn('[CHAT] Parse error:', parseError, 'Data:', currentData);
                         currentData = '';
                     }
                 }
             }
         }
     } catch (error) {
-        console.error('Fetch error:', error);
+        console.error('[CHAT] Fetch error:', error);
         setStatus('Connection error - retry', true);
         userInput.disabled = false;
         sendBtn.disabled = false;
@@ -238,15 +345,18 @@ async function sendMessage(message) {
 }
 
 sendBtn.addEventListener('click', () => {
-    unlockAudio();
     sendMessage(userInput.value);
 });
+
 userInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
-        unlockAudio();
         sendMessage(userInput.value);
     }
 });
 
+// Focus input on page load
+userInput.focus();
+
 // Initial status
 setStatus('Ready to chat', true);
+console.log('[INIT] Chat interface ready');
