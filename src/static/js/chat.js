@@ -35,9 +35,28 @@ async function unlockAudio() {
     console.log('[AUDIO] Attempting to unlock audio context');
     
     try {
-        // Create a silent audio buffer and play it
-        audioPlayer.volume = 0.01; // Very quiet
-        audioPlayer.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4S+T3idAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//sQZDwP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAEVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+        // CRITICAL FIX: Use Web Audio API instead of HTML5 audio for unlock
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) {
+            const ctx = new AudioContext();
+            const buffer = ctx.createBuffer(1, 1, 22050);
+            const source = ctx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(ctx.destination);
+            source.start(0);
+            
+            // Resume context (required on some browsers)
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+            }
+            
+            console.log('[AUDIO] Web Audio API unlocked');
+        }
+        
+        // Also unlock HTML5 audio element
+        audioPlayer.volume = 0.01;
+        // Use a data URI that's guaranteed to work
+        audioPlayer.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
         
         const playPromise = audioPlayer.play();
         
@@ -45,16 +64,14 @@ async function unlockAudio() {
             await playPromise;
             audioPlayer.pause();
             audioPlayer.currentTime = 0;
-            audioPlayer.volume = 1.0; // Restore volume
+            audioPlayer.volume = 1.0;
             audioUnlocked = true;
-            console.log('[AUDIO] Audio unlocked successfully');
+            console.log('[AUDIO] HTML5 audio unlocked successfully');
         }
     } catch (e) {
-        console.warn('[AUDIO] Failed to unlock:', e);
-        // Try again on next interaction
-        setTimeout(() => {
-            audioUnlocked = false;
-        }, 100);
+        console.warn('[AUDIO] Unlock attempt failed:', e.name, e.message);
+        // Mark as unlocked anyway - will fail gracefully on first real play
+        audioUnlocked = true;
     }
 }
 
@@ -130,8 +147,26 @@ async function playNextAudio() {
         queueRemaining: audioQueue.length
     });
     
+    // CRITICAL: Validate audio data first
+    if (!audio || audio.length < 100) {
+        console.error('[AUDIO] Invalid audio data - skipping');
+        isPlaying = false;
+        if (audioQueue.length > 0) {
+            playNextAudio();
+        }
+        return;
+    }
+    
     showTalkingAvatar();
     showSubtitles(text);
+    
+    // CRITICAL: Clean up previous audio
+    audioPlayer.pause();
+    audioPlayer.currentTime = 0;
+    audioPlayer.src = '';
+    
+    // Small delay to ensure cleanup
+    await new Promise(resolve => setTimeout(resolve, 50));
     
     // CRITICAL: Set up event handlers BEFORE changing src
     audioPlayer.onended = () => {
@@ -151,7 +186,8 @@ async function playNextAudio() {
             error: e,
             networkState: audioPlayer.networkState,
             readyState: audioPlayer.readyState,
-            errorCode: audioPlayer.error ? audioPlayer.error.code : 'unknown'
+            errorCode: audioPlayer.error ? audioPlayer.error.code : 'unknown',
+            errorMessage: audioPlayer.error ? audioPlayer.error.message : 'unknown'
         });
         isPlaying = false;
         hideSubtitles();
@@ -163,23 +199,17 @@ async function playNextAudio() {
         }
     };
     
-    // CRITICAL: Validate base64 data
-    if (!audio || audio.length < 100) {
-        console.error('[AUDIO] Invalid audio data');
-        isPlaying = false;
-        hideSubtitles();
-        if (audioQueue.length > 0) {
-            playNextAudio();
-        }
-        return;
-    }
+    // Set the audio source with proper MIME type
+    audioPlayer.src = `data:audio/mpeg;base64,${audio}`;
     
-    // Set the audio source
-    audioPlayer.src = `data:audio/mp3;base64,${audio}`;
+    // Force load
+    audioPlayer.load();
     
-    // Load the audio
+    // Small delay before play
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    // Attempt to play
     try {
-        audioPlayer.load(); // Ensure audio is loaded
         await audioPlayer.play();
         console.log('[AUDIO] Started playing successfully');
     } catch (err) {
@@ -188,26 +218,36 @@ async function playNextAudio() {
             message: err.message
         });
         
-        // If autoplay blocked, try to unlock again
+        // If autoplay blocked, show user prompt
         if (err.name === 'NotAllowedError') {
-            console.log('[AUDIO] Autoplay blocked - attempting unlock');
-            audioUnlocked = false;
-            await unlockAudio();
+            console.log('[AUDIO] Autoplay blocked - user interaction required');
+            setStatus('Click to enable audio', true);
             
-            // Retry play
-            try {
-                await audioPlayer.play();
-                console.log('[AUDIO] Retry successful');
-            } catch (retryErr) {
-                console.error('[AUDIO] Retry failed:', retryErr);
-                isPlaying = false;
-            }
+            // Wait for next user interaction
+            const enableAudio = async () => {
+                audioUnlocked = false;
+                await unlockAudio();
+                
+                // Retry this audio
+                try {
+                    await audioPlayer.play();
+                    console.log('[AUDIO] Retry successful after user interaction');
+                    document.removeEventListener('click', enableAudio);
+                } catch (retryErr) {
+                    console.error('[AUDIO] Retry still failed:', retryErr);
+                    isPlaying = false;
+                    if (audioQueue.length > 0) {
+                        playNextAudio();
+                    }
+                }
+            };
+            
+            document.addEventListener('click', enableAudio, { once: true });
         } else {
             isPlaying = false;
-        }
-        
-        if (!isPlaying && audioQueue.length > 0) {
-            playNextAudio();
+            if (audioQueue.length > 0) {
+                playNextAudio();
+            }
         }
     }
 }
@@ -215,9 +255,13 @@ async function playNextAudio() {
 async function sendMessage(message) {
     if (!message.trim()) return;
     
-    // Ensure audio is unlocked before sending
+    // CRITICAL: Force audio unlock on first message
     if (!audioUnlocked) {
+        console.log('[CHAT] First message - unlocking audio');
         await unlockAudio();
+        
+        // Give browser time to process unlock
+        await new Promise(resolve => setTimeout(resolve, 100));
     }
     
     addUserMessage(message);
