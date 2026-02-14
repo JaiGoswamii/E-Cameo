@@ -99,14 +99,25 @@ session = SessionMemory()
 # TTS PROCESSOR FOR WEB
 # =============================
 class WebTTSProcessor:
-    def __init__(self, model, voice_id, output_format):
+    def __init__(self, model, voice_id, output_format, use_mock=False):
         self.model = model
         self.voice_id = voice_id
         self.output_format = output_format
         self.sample_rate = 44100
+        self.use_mock = use_mock
 
     def process_text_to_speech(self, text: str) -> bytes:
         """Convert text to speech and return audio bytes"""
+        # MOCK MODE: Return fake MP3 header for testing without API calls
+        if self.use_mock:
+            print(f"[MOCK TTS] Simulating audio for: {text[:30]}...")
+            # Minimal valid MP3 frame (silence, ~0.026 seconds)
+            # This allows testing audio playback without spending credits
+            duration = len(text) * 0.05  # ~50ms per character
+            frames = int(duration / 0.026)
+            mock_audio = b'\xff\xfb\x90\x00' * frames  # Valid MP3 frame
+            return mock_audio
+        
         try:
             audio_generator = elevenlabs_client.generate(
                 text=text,
@@ -133,7 +144,11 @@ class WebTTSProcessor:
 # SSE CHAT ENDPOINT
 # =============================
 voice_id = os.getenv("ELEVENLABS_VOICE_ID", "QtEl85LECywm4BDbmbXB")
-tts_processor = WebTTSProcessor("eleven_multilingual_v2", voice_id, "mp3_44100_128")
+use_mock_tts = os.getenv("USE_MOCK_TTS", "false").lower() == "true"
+tts_processor = WebTTSProcessor("eleven_multilingual_v2", voice_id, "mp3_44100_128", use_mock=use_mock_tts)
+
+if use_mock_tts:
+    print("[INFO] Running in MOCK TTS mode - no ElevenLabs API calls will be made")
 
 @app.route('/chat', methods=['POST'])
 def chat():

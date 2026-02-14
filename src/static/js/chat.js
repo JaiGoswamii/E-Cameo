@@ -101,38 +101,43 @@ async function playNextAudio() {
     showTalkingAvatar();
     showSubtitles(text);
     
-    audioPlayer.src = `data:audio/mp3;base64,${audio}`;
+    // Set up event handlers BEFORE setting src
+    audioPlayer.onended = () => {
+        console.log('[DEBUG] Audio ended');
+        isPlaying = false;
+        hideSubtitles();
+        if (audioQueue.length > 0) {
+            playNextAudio();
+        } else {
+            showStaticAvatar();
+            setStatus('Ready to chat', true);
+        }
+    };
     
-    // Wait for audio to actually be ready before playing
-    await new Promise((resolve) => {
-        audioPlayer.onloadeddata = () => {
-            console.log('[DEBUG] Audio loaded successfully');
-            resolve();
-        };
-        audioPlayer.onerror = (e) => {
-            console.error('[DEBUG] Audio loading error:', e);
-            resolve(); // Continue anyway
-        };
-    });
+    audioPlayer.onerror = (e) => {
+        console.error('[DEBUG] Audio playback error:', e);
+        isPlaying = false;
+        hideSubtitles();
+        if (audioQueue.length > 0) {
+            playNextAudio();
+        } else {
+            showStaticAvatar();
+            setStatus('Error playing audio', true);
+        }
+    };
+    
+    audioPlayer.src = `data:audio/mp3;base64,${audio}`;
     
     try {
         await audioPlayer.play();
         console.log('[DEBUG] Audio started playing');
     } catch (err) {
         console.error('[DEBUG] Play error:', err);
-    }
-    
-    audioPlayer.onended = () => {
-        console.log('[DEBUG] Audio ended');
         isPlaying = false;
         if (audioQueue.length > 0) {
             playNextAudio();
-        } else {
-            showStaticAvatar();
-            hideSubtitles();
-            setStatus('Ready to chat', true);
         }
-    };
+    }
 }
 
 async function sendMessage(message) {
