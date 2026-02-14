@@ -74,10 +74,14 @@ function escapeHtml(text) {
 }
 
 async function playNextAudio() {
+    console.log('[DEBUG] playNextAudio called, isPlaying:', isPlaying, 'queue length:', audioQueue.length);
+    
     if (isPlaying || audioQueue.length === 0) return;
     
     isPlaying = true;
     const {audio, text} = audioQueue.shift();
+    
+    console.log('[DEBUG] Playing audio, text:', text.substring(0, 30), 'audio length:', audio.length);
     
     showTalkingAvatar();
     showSubtitles(text);
@@ -86,12 +90,25 @@ async function playNextAudio() {
     
     // Wait for audio to actually be ready before playing
     await new Promise((resolve) => {
-        audioPlayer.onloadeddata = resolve;
+        audioPlayer.onloadeddata = () => {
+            console.log('[DEBUG] Audio loaded successfully');
+            resolve();
+        };
+        audioPlayer.onerror = (e) => {
+            console.error('[DEBUG] Audio loading error:', e);
+            resolve(); // Continue anyway
+        };
     });
     
-    audioPlayer.play();
+    try {
+        await audioPlayer.play();
+        console.log('[DEBUG] Audio started playing');
+    } catch (err) {
+        console.error('[DEBUG] Play error:', err);
+    }
     
     audioPlayer.onended = () => {
+        console.log('[DEBUG] Audio ended');
         isPlaying = false;
         if (audioQueue.length > 0) {
             playNextAudio();
@@ -154,7 +171,9 @@ async function sendMessage(message) {
                             case 'audio':
                             case 'audio_chunk':
                                 // Queue audio for playback (subtitles + avatar animation)
+                                console.log('[DEBUG] Received audio chunk, length:', data.audio.length);
                                 audioQueue.push({audio: data.audio, text: data.text || ''});
+                                console.log('[DEBUG] Audio queue length:', audioQueue.length);
                                 playNextAudio();
                                 break;
                             
