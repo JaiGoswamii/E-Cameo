@@ -137,7 +137,7 @@ class WebTTSProcessor:
 # =============================
 # SSE CHAT ENDPOINT - FIXED
 # =============================
-voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+voice_id = os.getenv("ELEVENLABS_VOICE_ID", "pyttJMSRzvd3DEtHK5UZ")
 tts_processor = WebTTSProcessor("eleven_multilingual_v2", voice_id, "mp3_44100_128")
 
 @app.route('/chat', methods=['POST'])
