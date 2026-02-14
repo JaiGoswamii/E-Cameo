@@ -129,45 +129,6 @@ class WebTTSProcessor:
         return base64.b64encode(audio_bytes).decode('utf-8')
 
 
-class SentenceBuffer:
-    """Buffers streaming text and detects complete sentences"""
-    
-    def __init__(self):
-        self.buffer = ""
-        self.sentence_pattern = re.compile(r'([.!?]+)(?:\s+|$)')
-    
-    def add_text(self, text: str) -> List[str]:
-        """Add text to buffer and return any complete sentences"""
-        self.buffer += text
-        sentences = []
-        
-        matches = list(self.sentence_pattern.finditer(self.buffer))
-        
-        if matches:
-            last_match = matches[-1]
-            end_pos = last_match.end()
-            
-            completed = self.buffer[:end_pos]
-            self.buffer = self.buffer[end_pos:]
-            
-            sentence_parts = self.sentence_pattern.split(completed)
-            
-            for i in range(0, len(sentence_parts) - 1, 2):
-                if sentence_parts[i].strip():
-                    sentence = sentence_parts[i].strip() + sentence_parts[i + 1]
-                    sentences.append(sentence)
-        
-        return sentences
-    
-    def flush(self) -> Optional[str]:
-        """Get any remaining text in buffer"""
-        if self.buffer.strip():
-            remaining = self.buffer.strip()
-            self.buffer = ""
-            return remaining
-        return None
-
-
 # =============================
 # SSE CHAT ENDPOINT
 # =============================
@@ -194,36 +155,45 @@ def chat():
             stream = openai_client.chat.completions.create(
                 model=MODEL,
                 messages=messages,
-                # REMOVE tools=TOOLS since we commented it out
                 stream=True,
             )
             
             full_response = ""
-            sentence_buffer = SentenceBuffer()
+            text_buffer = ""  # Simple accumulator instead of sentence buffer
             
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_response += content
+                    text_buffer += content
                     
                     # Send text chunk
                     yield f"data: {json.dumps({'type': 'text_chunk', 'text': content})}\n\n"
                     
-                    # Generate audio for complete sentences
-                    complete_sentences = sentence_buffer.add_text(content)
-                    for sentence in complete_sentences:
-                        audio = tts_processor.process_text_to_speech(sentence)
-                        if len(audio) > 0:
-                            audio_b64 = tts_processor.audio_to_base64(audio)
-                            yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': sentence})}\n\n"
+                    # Generate audio every ~50 characters or at sentence breaks
+                    if len(text_buffer) >= 50 or any(text_buffer.endswith(p) for p in ['. ', '! ', '? ', '.\n', '!\n', '?\n']):
+                        if text_buffer.strip():
+                            print(f"[DEBUG] Generating audio for: {text_buffer.strip()[:50]}...")
+                            audio = tts_processor.process_text_to_speech(text_buffer.strip())
+                            print(f"[DEBUG] Audio bytes generated: {len(audio)}")
+                            if len(audio) > 0:
+                                audio_b64 = tts_processor.audio_to_base64(audio)
+                                print(f"[DEBUG] Base64 length: {len(audio_b64)}")
+                                yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': text_buffer.strip()})}\n\n"
+                            else:
+                                print(f"[DEBUG] WARNING: No audio generated!")
+                            text_buffer = ""
             
-            # Flush remaining text
-            remaining = sentence_buffer.flush()
-            if remaining:
-                audio = tts_processor.process_text_to_speech(remaining)
+            # Send any remaining text as audio
+            if text_buffer.strip():
+                print(f"[DEBUG] Flushing remaining: {text_buffer.strip()[:50]}...")
+                audio = tts_processor.process_text_to_speech(text_buffer.strip())
+                print(f"[DEBUG] Flush audio bytes: {len(audio)}")
                 if len(audio) > 0:
                     audio_b64 = tts_processor.audio_to_base64(audio)
-                    yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': remaining})}\n\n"
+                    yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': text_buffer.strip()})}\n\n"
+                else:
+                    print(f"[DEBUG] WARNING: No audio in flush!")
             
             # Signal completion
             yield f"data: {json.dumps({'type': 'response_end'})}\n\n"
