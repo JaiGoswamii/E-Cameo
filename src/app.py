@@ -99,25 +99,14 @@ session = SessionMemory()
 # TTS PROCESSOR FOR WEB
 # =============================
 class WebTTSProcessor:
-    def __init__(self, model, voice_id, output_format, use_mock=False):
+    def __init__(self, model, voice_id, output_format):
         self.model = model
         self.voice_id = voice_id
         self.output_format = output_format
         self.sample_rate = 44100
-        self.use_mock = use_mock
 
     def process_text_to_speech(self, text: str) -> bytes:
         """Convert text to speech and return audio bytes"""
-        # MOCK MODE: Return fake MP3 header for testing without API calls
-        if self.use_mock:
-            print(f"[MOCK TTS] Simulating audio for: {text[:30]}...")
-            # Minimal valid MP3 frame (silence, ~0.026 seconds)
-            # This allows testing audio playback without spending credits
-            duration = len(text) * 0.05  # ~50ms per character
-            frames = int(duration / 0.026)
-            mock_audio = b'\xff\xfb\x90\x00' * frames  # Valid MP3 frame
-            return mock_audio
-        
         try:
             audio_generator = elevenlabs_client.generate(
                 text=text,
@@ -144,11 +133,7 @@ class WebTTSProcessor:
 # SSE CHAT ENDPOINT
 # =============================
 voice_id = os.getenv("ELEVENLABS_VOICE_ID", "QtEl85LECywm4BDbmbXB")
-use_mock_tts = os.getenv("USE_MOCK_TTS", "false").lower() == "true"
-tts_processor = WebTTSProcessor("eleven_multilingual_v2", voice_id, "mp3_44100_128", use_mock=use_mock_tts)
-
-if use_mock_tts:
-    print("[INFO] Running in MOCK TTS mode - no ElevenLabs API calls will be made")
+tts_processor = WebTTSProcessor("eleven_multilingual_v2", voice_id, "mp3_44100_128")
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -188,27 +173,18 @@ def chat():
                     # Generate audio every ~50 characters or at sentence breaks
                     if len(text_buffer) >= 50 or any(text_buffer.endswith(p) for p in ['. ', '! ', '? ', '.\n', '!\n', '?\n']):
                         if text_buffer.strip():
-                            print(f"[DEBUG] Generating audio for: {text_buffer.strip()[:50]}...")
                             audio = tts_processor.process_text_to_speech(text_buffer.strip())
-                            print(f"[DEBUG] Audio bytes generated: {len(audio)}")
                             if len(audio) > 0:
                                 audio_b64 = tts_processor.audio_to_base64(audio)
-                                print(f"[DEBUG] Base64 length: {len(audio_b64)}")
                                 yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': text_buffer.strip()})}\n\n"
-                            else:
-                                print(f"[DEBUG] WARNING: No audio generated!")
                             text_buffer = ""
             
             # Send any remaining text as audio
             if text_buffer.strip():
-                print(f"[DEBUG] Flushing remaining: {text_buffer.strip()[:50]}...")
                 audio = tts_processor.process_text_to_speech(text_buffer.strip())
-                print(f"[DEBUG] Flush audio bytes: {len(audio)}")
                 if len(audio) > 0:
                     audio_b64 = tts_processor.audio_to_base64(audio)
                     yield f"data: {json.dumps({'type': 'audio_chunk', 'audio': audio_b64, 'text': text_buffer.strip()})}\n\n"
-                else:
-                    print(f"[DEBUG] WARNING: No audio in flush!")
             
             # Signal completion
             yield f"data: {json.dumps({'type': 'response_end'})}\n\n"

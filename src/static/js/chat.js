@@ -23,9 +23,8 @@ async function unlockAudio() {
         audioPlayer.pause();
         audioPlayer.currentTime = 0;
         audioUnlocked = true;
-        console.log('[DEBUG] Audio unlocked');
     } catch (e) {
-        console.log('[DEBUG] Audio unlock failed:', e);
+        // Silent fail - not critical
     }
 }
 
@@ -89,21 +88,16 @@ function escapeHtml(text) {
 }
 
 async function playNextAudio() {
-    console.log('[DEBUG] playNextAudio called, isPlaying:', isPlaying, 'queue length:', audioQueue.length);
-    
     if (isPlaying || audioQueue.length === 0) return;
     
     isPlaying = true;
     const {audio, text} = audioQueue.shift();
-    
-    console.log('[DEBUG] Playing audio, text:', text.substring(0, 30), 'audio length:', audio.length);
     
     showTalkingAvatar();
     showSubtitles(text);
     
     // Set up event handlers BEFORE setting src
     audioPlayer.onended = () => {
-        console.log('[DEBUG] Audio ended');
         isPlaying = false;
         hideSubtitles();
         if (audioQueue.length > 0) {
@@ -115,7 +109,7 @@ async function playNextAudio() {
     };
     
     audioPlayer.onerror = (e) => {
-        console.error('[DEBUG] Audio playback error:', e);
+        console.error('Audio playback error:', e);
         isPlaying = false;
         hideSubtitles();
         if (audioQueue.length > 0) {
@@ -130,9 +124,8 @@ async function playNextAudio() {
     
     try {
         await audioPlayer.play();
-        console.log('[DEBUG] Audio started playing');
     } catch (err) {
-        console.error('[DEBUG] Play error:', err);
+        console.error('Play error:', err);
         isPlaying = false;
         if (audioQueue.length > 0) {
             playNextAudio();
@@ -200,9 +193,7 @@ async function sendMessage(message) {
                             case 'audio':
                             case 'audio_chunk':
                                 // Queue audio for playback (subtitles + avatar animation)
-                                console.log('[DEBUG] Received audio chunk, length:', data.audio.length);
                                 audioQueue.push({audio: data.audio, text: data.text || ''});
-                                console.log('[DEBUG] Audio queue length:', audioQueue.length);
                                 playNextAudio();
                                 break;
                             
@@ -231,7 +222,7 @@ async function sendMessage(message) {
                         
                         currentData = '';
                     } catch (parseError) {
-                        console.error('[DEBUG] JSON parse error:', parseError, 'Data:', currentData.slice(0, 100));
+                        // Skip invalid JSON silently
                         currentData = '';
                     }
                 }
