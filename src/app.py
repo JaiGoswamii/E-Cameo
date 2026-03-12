@@ -37,6 +37,7 @@ app.config['SECRET_KEY'] = 'your-secret-key-here'
 Base_dir = Path(__file__).parent.parent
 linkedin_path = os.getenv("LINKEDIN_PDF_PATH", Base_dir / "src" / "Me" / "linkedin.pdf")
 summary_path = os.getenv("SUMMARY_TXT_PATH", Base_dir / "src" / "Me" / "summary.txt")
+resume_path = os.getenv("RESUME_PDF_PATH", Base_dir / "src" / "Me" / "Jai_Goswami_Resume.pdf")
 
 reader = PdfReader(linkedin_path)
 linkedin = ""
@@ -44,6 +45,16 @@ for page in reader.pages:
     text = page.extract_text()
     if text:
         linkedin += text + "\n"
+
+# =============================
+# LOAD RESUME PDF
+# =============================
+resume_reader = PdfReader(resume_path)
+resume = ""
+for page in resume_reader.pages:
+    text = page.extract_text()
+    if text:
+        resume += text + "\n"
 
 # =============================
 # LOAD TEXTUAL INFO
@@ -56,11 +67,11 @@ name = os.getenv("PERSON_NAME", "Jai Goswami")
 system_prompt = f"You are acting as {name}. You are answering questions on {name}'s website, \
 particularly questions related to {name}'s career, background, skills and experience. \
 Your responsibility is to represent {name} for interactions on the website as faithfully as possible. \
-You are given a summary of {name}'s background and LinkedIn profile which you can use to answer questions. \
+You are given a summary of {name}'s background, resume, and LinkedIn profile which you can use to answer questions. \
 Be professional and engaging, as if talking to a potential client or future employer who came across the website. \
 If you don't know the answer, say so."
 
-system_prompt += f"\n\n## Summary:\n{summary}\n\n## LinkedIn Profile:\n{linkedin}\n\n"
+system_prompt += f"\n\n## Summary:\n{summary}\n\n## Resume:\n{resume}\n\n## LinkedIn Profile:\n{linkedin}\n\n"
 system_prompt += f"With this context, please chat with the user, always staying in character as {name}."
 system_prompt += f"You are strictly not to answer questions that are not related to {name}'s career, background, skills and experience, in such cases you should say that you can only answer questions related to {name}'s career, background, skills and experience."
 
