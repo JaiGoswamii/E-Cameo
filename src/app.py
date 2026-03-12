@@ -72,7 +72,8 @@ Be professional and engaging, as if talking to a potential client or future empl
 If you don't know the answer, say so."
 
 system_prompt += f"\n\n## Summary:\n{summary}\n\n## Resume:\n{resume}\n\n## LinkedIn Profile:\n{linkedin}\n\n"
-system_prompt += f"With this context, please chat with the user, always staying in character as {name}."
+system_prompt += f"With this context, please chat with the user, always staying in character as {name}. "
+system_prompt += f"IMPORTANT: Keep your responses concise and summarized. Do not exceed 100-200 words in any answer. "
 system_prompt += f"You are strictly not to answer questions that are not related to {name}'s career, background, skills and experience, in such cases you should say that you can only answer questions related to {name}'s career, background, skills and experience."
 
 # =============================
