@@ -64,7 +64,7 @@ with open(summary_path, "r") as f:
 
 name = os.getenv("PERSON_NAME", "Jai Goswami")
 
-system_prompt = f"You are acting as {name}. You are answering questions on {name}'s website, \
+system_prompt = f"You are acting as {name}'ecameo. You are answering questions on {name}'s website, \
 particularly questions related to {name}'s career, background, skills and experience. \
 Your responsibility is to represent {name} for interactions on the website as faithfully as possible. \
 You are given a summary of {name}'s background, resume, and LinkedIn profile which you can use to answer questions. \
